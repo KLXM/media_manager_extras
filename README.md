@@ -1,747 +1,344 @@
-# MediaManagerHelper
+# media_manager_extras
 
-Eine Hilfsklasse für REDAXO, um Media Manager Typen und Effekte einfach in AddOns zu verwalten und ein Srcset-Effekt.
+REDAXO-Addon mit zwei unabhängigen Komponenten:
 
-## Features
+| Komponente | Zweck |
+|---|---|
+| `rex_media_manager_service` | Idempotentes Anlegen/Verwalten von Typen und Effekten (analog zu `rex_sql_table`) |
+| `KLXM\MediaManagerExtras\ResponsiveImage` | `srcset`-Placeholder-Auflösung in `img`- und `picture`-Tags |
 
-- Einfaches Anlegen und Verwalten von Media Manager Typen
-- Automatisches Update bestehender Typen
-- Validierung von Effekten und Parametern
-- Debug-Möglichkeiten für verfügbare Effekte
-- Import/Export von Medientypen als JSON
-- Automatische Bereinigung bei AddOn-Deinstallation
+---
 
+## Inhalt
 
-## Warum ein MediaManagerHelper?
+- [Installation](#installation)
+- [Backend-Explorer](#backend-explorer)
+- [Schnellstart](#schnellstart)
+- [rex_media_manager_service](#rex_media_manager_service-1)
+  - [Typen definieren](#typen-definieren)
+  - [Effekte definieren](#effekte-definieren)
+  - [Effekte auf mehrere Typen](#effekte-auf-mehrere-typen)
+  - [Persistieren und Löschen](#persistieren-und-löschen)
+  - [Introspection](#introspection)
+  - [Import / Export](#import--export)
+- [ResponsiveImage](#responsiveimage-1)
+  - [img-Tags ausgeben](#img-tags-ausgeben)
+  - [picture-Tags ausgeben](#picture-tags-ausgeben)
+  - [Hilfsmethoden](#hilfsmethoden)
+- [API-Referenz](#api-referenz)
+  - [rex_media_manager_service](#api-rex_media_manager_service)
+  - [KLXM\MediaManagerExtras\ResponsiveImage](#api-responsiveimage)
 
-### Ohne Helper (Raw SQL)
-```php
-// Media Typ anlegen
-$sql = rex_sql::factory();
-$sql->setTable(rex::getTable('media_manager_type'));
-$sql->setValue('name', 'mein_typ');
-$sql->setValue('description', 'Mein Typ');
-$sql->addGlobalCreateFields();
-$sql->insert();
+---
 
-$typeId = $sql->getLastId();
+## Installation
 
-// Effekt hinzufügen  
-$sql->setTable(rex::getTable('media_manager_type_effect'));
-$sql->setValue('type_id', $typeId); 
-$sql->setValue('effect', 'resize');
-$sql->setValue('parameters', json_encode([
-    'rex_effect_resize' => [
-        'width' => 500,
-        'height' => 500
-    ]
-]));
-$sql->setValue('priority', 1);
-$sql->addGlobalCreateFields();
-$sql->insert();
-```
+Addon installieren und aktivieren. Es registriert automatisch:
+- den Effekt **`srcset_helper`** im Media Manager
+- den **Frontend-Output-Filter** für Placeholder-Auflösung (`srcset="rex_media_type=..."` → echte URLs)
 
-### Mit Helper
-```php
-$mm = MediaManagerHelper::factory();
-$mm->addType('mein_typ', 'Mein Typ')
-   ->addEffect('mein_typ', 'resize', [
-       'width' => 500, 
-       'height' => 500
-   ])
-   ->install();
-```
+---
 
-## Und das ist noch nicht alles
+## Backend-Explorer
 
-- Parameter für Effekte anzeigen: `$mm->showEffectParams('resize')`
-- Typen exportieren/importieren: `$mm->exportToJson(['mein_typ'])`
-- Automatische Validierung aller Parameter
-- Automatisches Update bestehender Typen
-- Mehrern Typen oder allen einen Effekt hinzufügen am Anfang oder am Ende
+Im Backend unter **Media Manager Extras → Schema Explorer**:
 
-Der Helper macht's einfach, sicher und wartbar. 🚀
+- Typen und Effekte auswählen
+- konfigurierte Werte und Parameterschemas einsehen
+- fertigen `ensure()`-Code automatisch generieren und kopieren
 
+---
 
-## Einfache Verwendung
-
-### In der install.php des eigenen AddOns
+## Schnellstart
 
 ```php
-$mm = MediaManagerHelper::factory();
-
-// Einfachen Thumbnail erstellen
-$mm->addType('mein_thumb', 'Thumbnail für mein AddOn')
-   ->addEffect('mein_thumb', 'resize', [
-       'width' => 500,
-       'height' => 500
-   ])
-   ->install();
-```
-
-### In der uninstall.php
-
-```php
-$mm = MediaManagerHelper::factory();
-$mm->addType('mein_thumb')->uninstall();
-```
-
-## Erweiterte Beispiele
-
-### Focuspoint_fit mit Resize 
-
-```php
-$mm = MediaManagerHelper::factory();
-$mm->addType('quadrat_fokus', 'Quadratisches Bild mit Fokuspunkt')
-    // Zuerst auf max 2000px bringen
-    ->addEffect('quadrat_fokus', 'resize', [
-        'width' => 2000,
-        'height' => 2000,
-        'style' => 'maximum',
-        'allow_enlarge' => 'not_enlarge'
+// install.php des eigenen Addons
+rex_media_manager_service::factory()
+    ->ensureType('hero_default', 'Hero Standardbild')
+    ->ensureEffect('hero_default', 'resize', [
+        'width'         => 1600,
+        'height'        => 900,
+        'style'         => 'maximum',
+        'allow_enlarge' => 'not_enlarge',
     ], 1)
-    // Dann quadratisch zuschneiden mit Fokuspunkt
-    ->addEffect('quadrat_fokus', 'focuspoint_fit', [
-        'width' => '1fr',     
-        'height' => '1fr',    
-        'zoom' => '0',       
-        'meta' => 'med_focuspoint',
-        'focus' => '50.0,50.0'  // Fallback Fokuspunkt in der Mitte (x,y)
+    ->ensureEffect('hero_default', 'srcset_helper', [
+        'srcset' => '640 640w, 960 960w, 1280 1280w, 1600 1600w',
     ], 2)
-    ->install();
+    ->ensure();
 ```
 
-
-## Import und Export
-
-### Media Types als JSON exportieren
-
 ```php
-$mm = MediaManagerHelper::factory();
-
-// Alle Custom-Typen exportieren (ohne System-Typen)
-$json = $mm->exportToJson();
-
-// Nur bestimmte Typen exportieren
-$json = $mm->exportToJson(['mein_typ', 'mein_anderer_typ']);
-
-// Direkt in Datei speichern
-$mm->exportToJson(
-    ['mein_typ'], // typen
-    'media_types.json', // datei
-    true, // pretty print
-    false // keine system typen
-);
-
-// Alternative Methode für Datei-Export
-$success = $mm->exportToFile(
-    'media_types.json',
-    ['mein_typ']
+// Template / Modul
+echo \KLXM\MediaManagerExtras\ResponsiveImage::getPictureTag(
+    rex_sql::factory()->getValue('filename'),
+    'hero_default',
+    [
+        '(min-width: 80rem)' => 'hero_xl',
+        ['media' => '(min-width: 48rem)', 'type' => 'hero_md'],
+    ],
+    ['alt' => rex_escape($alt), 'loading' => 'lazy'],
 );
 ```
 
-### Media Types aus JSON importieren
-
 ```php
-// In der install.php:
-$mm = MediaManagerHelper::factory();
-
-// Typen aus JSON-Datei importieren und installieren
-$mm->importFromJson($this->getPath('media_types.json'))
-   ->install();
+// uninstall.php des eigenen Addons
+rex_media_manager_service::factory()
+    ->ensureType('hero_default')
+    ->ensureType('hero_xl')
+    ->ensureType('hero_md')
+    ->uninstall();
 ```
 
-Beispiel JSON-Datei (`media_types.json`):
-```json
-[
-    {
-        "name": "mein_typ",
-        "description": "Mein Media Manager Typ",
-        "effects": {
-            "1": {
-                "effect": "resize",
-                "params": {
-                    "rex_effect_resize": {
-                        "width": 800,
-                        "height": 600,
-                        "style": "maximum",
-                        "allow_enlarge": "not_enlarge"
-                    }
-                }
-            }
-        }
-    }
-]
-```
+---
 
-## Debug-Funktionen
+## rex_media_manager_service
 
-### Parameter eines Effekts anzeigen
+### Typen definieren
 
 ```php
-// Parameter eines Effekts anzeigen
-$mm = MediaManagerHelper::factory();
-$mm->showEffectParams('focuspoint_fit');
+$service = rex_media_manager_service::factory();
 
-/* Ausgabe:
-array:3 [
-    "name" => "focuspoint_fit"
-    "class" => "rex_effect_focuspoint_fit"
-    "params" => array:5 [
-        "meta" => array:4 [
-            "type" => "select"
-            "default" => "med_focuspoint"
-            "options" => array:2 [
-                12 => "med_focuspoint"
-                13 => "default => Koordinate / Ersatzwert"
-            ]
-            "notice" => null
-        ]
-        "focus" => array:4 [
-            "type" => "string"
-            "default" => null
-            "options" => null
-            "notice" => "x,y: 0.0,0.0 ... 100.0,100.0"
-        ]
-        "width" => array:4 [
-            "type" => "int"
-            "default" => null
-            "options" => null
-            "notice" => "absolut: n [px] | relativ: n % | Aspect-Ratio: n fr"
-        ]
-        "height" => array:4 [
-            "type" => "int"
-            "default" => null
-            "options" => null
-            "notice" => "absolut: n [px] | relativ: n % | Aspect-Ratio: n fr"
-        ]
-        "zoom" => array:4 [
-            "type" => "select"
-            "default" => null
-            "options" => array:5 []
-            "notice" => "0% = Zielgröße (kein Zoom) ... 100% = Ausschnitt größtmöglich wählen"
-        ]
-    ]
-]
-*/
+// Typ registrieren (wird beim ensure() angelegt oder aktualisiert)
+$service->ensureType('hero_default', 'Hero Standardbild');
+```
 
-// Aus dieser Debug-Ausgabe können wir dann den entsprechenden Effekt mit den richtigen Parametern bauen:
-$mm->addType('quadrat_fokus', 'Quadratisches Bild mit Fokuspunkt')
-    ->addEffect('quadrat_fokus', 'focuspoint_fit', [
-        'width' => '1fr',     // Aus notice: "Aspect-Ratio: n fr"
-        'height' => '1fr',    // Gleiches Seitenverhältnis für Quadrat
-        'zoom' => '0',        // Aus notice: "0% = Zielgröße"
-        'meta' => 'med_focuspoint', // Aus options
-        'focus' => '50.0,50.0'  // Aus notice: "x,y: 0.0,0.0 ... 100.0,100.0"
+Mehrfachaufruf für denselben Namen aktualisiert nur die Beschreibung.
+
+### Effekte definieren
+
+```php
+$service
+    ->ensureType('hero_default', 'Hero Standardbild')
+    // Effekt mit expliziter Priorität
+    ->ensureEffect('hero_default', 'resize', [
+        'width'         => 1600,
+        'height'        => 900,
+        'style'         => 'maximum',
+        'allow_enlarge' => 'not_enlarge',
+    ], 1)
+    // Ohne Priorität: wird ans Ende gestellt
+    ->ensureEffect('hero_default', 'srcset_helper', [
+        'srcset' => '640 640w, 960 960w, 1280 1280w, 1600 1600w',
     ])
-    ->install();
+    ->ensure();
 ```
 
-### Alle verfügbaren Effekte anzeigen
+**Semantik der drei Varianten:**
+
+| Methode | Verhalten |
+|---|---|
+| `ensureEffect()` | Setzt die gesamte Effektreihenfolge neu (Prioritäten) |
+| `prependEffect()` | Fügt einen Effekt **vor** bestehende Effekte des Typs ein |
+| `appendEffect()` | Fügt einen Effekt **hinter** bestehende Effekte des Typs ein |
 
 ```php
-$mm = MediaManagerHelper::factory();
-$mm->listAvailableEffects();
+// Scharfzeichner vor alle bestehenden Effekte schieben
+$service
+    ->prependEffect('hero_default', 'filter_sharpen', ['amount' => 50])
+    ->ensure();
 
-/* Ausgabe z.B.:
-array:15 [
-    0 => "convert2img"
-    1 => "crop"
-    2 => "filter_blur"
-    3 => "filter_brightness"
-    4 => "filter_contrast"
-    5 => "filter_sharpen"
-    6 => "flip"
-    7 => "focuspoint_fit"
-    8 => "header"
-    9 => "image_format"
-    10 => "image_properties"
-    11 => "insert_image"
-    12 => "mediapath"
-    13 => "klxm_mediaproxy"
-    14 => "resize"
-    15 => "workspace"
-]
-*/
+// srcset-Helfer ans Ende hängen
+$service
+    ->appendEffect('hero_default', 'srcset_helper', ['srcset' => '640 640w, 1280 1280w'])
+    ->ensure();
 ```
 
-## Häufige Anwendungsfälle
+### Effekte auf mehrere Typen
 
-### Thumbnail mit maximaler Größe
+`$types` kann ein Array von Typnamen **oder** ein Wildcard-Pattern sein (`"news_*"`):
 
 ```php
-$mm->addType('max_thumb', 'Thumbnail mit maximaler Größe')
-   ->addEffect('max_thumb', 'resize', [
-       'width' => 800,
-       'height' => 600,
-       'style' => 'maximum',
-       'allow_enlarge' => 'not_enlarge'
-   ]);
+// Scharfzeichner an den Anfang mehrerer Typen
+$service
+    ->prependEffectToTypes(['hero_default', 'hero_stage'], 'filter_sharpen', ['amount' => 60])
+    ->ensure();
+
+// Wasserzeichen ans Ende aller news_*-Typen
+$service
+    ->appendEffectToTypes('news_*', 'insert_image', [
+        'brandimage' => 'watermark.png',
+        'hpos'       => 'center',
+        'vpos'       => 'middle',
+        'padding_x'  => -20,
+        'padding_y'  => -20,
+    ])
+    ->ensure();
 ```
 
-### Quadratischer Thumbnail
+### Persistieren und Löschen
 
 ```php
-$mm->addType('square_thumb', 'Quadratischer Thumbnail')
-   ->addEffect('square_thumb', 'resize', [
-       'width' => 400,
-       'height' => 400,
-       'style' => 'minimum'
-   ])
-   ->addEffect('square_thumb', 'crop', [
-       'width' => 400,
-       'height' => 400,
-       'hpos' => 'center',
-       'vpos' => 'middle'
-   ], 2);
+// Konfiguration in DB schreiben + Cache leeren
+$service->ensure();
+
+// Typen aus DB entfernen (Standard-Verhalten bei uninstall)
+$service
+    ->ensureType('hero_default')
+    ->uninstall();
+
+// Typen beim uninstall() erhalten
+$service
+    ->ensureType('hero_default')
+    ->keepTypesOnUninstall()
+    ->uninstall(); // löscht nichts
 ```
 
-### Bild mit Wasserzeichen
+### Introspection
+
+**Parameterschema eines Effekts:**
 
 ```php
-$mm->addType('watermark', 'Bild mit Wasserzeichen')
-   ->addEffect('watermark', 'resize', [
-       'width' => 1200,
-       'height' => 1200,
-       'style' => 'maximum'
-   ])
-   ->addEffect('watermark', 'insert_image', [
-       'brandimage' => 'wasserzeichen.png',
-       'hpos' => 'center',
-       'vpos' => 'middle',
-       'padding_x' => -20,
-       'padding_y' => -20
-   ], 2);
+$schema = rex_media_manager_service::factory()->getParamsForEffect('resize');
+// ['name' => 'resize', 'class' => 'rex_effect_resize', 'params' => [...]]
+dump($schema['params']);
 ```
 
-### Effekte mehreren Typen zuweisen
+**Vollständiger Typ-Snapshot (konfigurierte Werte + Schema):**
 
 ```php
-/**
- * Fügt mehreren Typen einen Effekt hinzu
- * @param string|array $types Pattern (z.B. "team_*") oder Array von Typnamen
- * @param string $effect Name des Effekts
- * @param array $params Effekt-Parameter
- * @param string $position 'append' oder 'prepend'
- */
-$mm = MediaManagerHelper::factory();
+$info = rex_media_manager_service::factory()->getParamsForType('hero_default');
+// ['type' => '...', 'description' => '...', 'effects' => [...]]
+// pro Effekt: 'configured' + 'schema'
+dump($info);
+```
 
-// Allen Team-Typen einen Wasserzeichen-Effekt hinzufügen
-$mm->addEffectToTypes('team_*', 'insert_image', [
-    'brandimage' => 'logo.png',
-    'hpos' => 'center'
-], 'append');
+**PHP-Code für einen Typ generieren:**
 
-// Mehreren Typen einen Resize voranstellen
-$mm->addEffectToTypes(
-    ['type1', 'type2'], 
-    'resize',
-    ['width' => 2000],
-    'prepend'
-);
+```php
+echo rex_media_manager_service::factory()->dumpType('hero_default');
+// → fertiger ensureType/ensureEffect-Code für copy-paste
+```
 
-// Allen vorhandenen Typen einen Effekt anfügen
-$mm->addEffectToTypes('*', 'resize', [
-    'width' => 2000,
-    'height' => 2000,
-    'style' => 'maximum'
+**Alle verfügbaren Effektnamen:**
+
+```php
+$effects = rex_media_manager_service::factory()->listAvailableEffects();
+// ['convert', 'crop', 'filter_blur', 'resize', 'srcset_helper', ...]
+```
+
+### Import / Export
+
+```php
+$service = rex_media_manager_service::factory();
+
+// Als JSON-String exportieren
+$json = $service->exportToJson();
+
+// Nur bestimmte Typen
+$json = $service->exportToJson(['hero_default', 'hero_stage']);
+
+// Direkt in Datei schreiben (gibt bool zurück)
+$service->exportToFile(rex_path::addonData('my_addon', 'mm-types.json'));
+
+// Aus Datei importieren und aktivieren
+$service
+    ->importFromJson(rex_path::addonData('my_addon', 'mm-types.json'))
+    ->ensure();
+```
+
+---
+
+## ResponsiveImage
+
+Der Output-Filter ist automatisch aktiv und ersetzt Placeholder wie `srcset="rex_media_type=hero_default"` im Frontend per DOM-Verarbeitung durch echte srcset-URLs.
+
+### img-Tags ausgeben
+
+```php
+use KLXM\MediaManagerExtras\ResponsiveImage;
+
+// img-Tag mit srcset-Placeholder (wird vom Output-Filter aufgelöst)
+echo ResponsiveImage::getImgTag('beispiel.jpg', 'hero_default', [
+    'alt'     => 'Beispielbild',
+    'loading' => 'lazy',
 ]);
 ```
 
-## Fehlerbehandlung
+SVG, PDF und EPS erhalten keinen srcset-Placeholder.
 
-Die Klasse prüft automatisch:
-- Ob ein Effekt verfügbar ist
-- Ob die angegebenen Parameter gültig sind
-- Ob der Media Manager verfügbar ist
+### picture-Tags ausgeben
 
-Bei Fehlern wird eine `rex_exception` geworfen.
-
-
-## MediaManagerHelper - API Dokumentation
-
-### Factory Methode
+`$sources` unterstützt zwei Formate:
 
 ```php
-public static function factory(): self
-```
-Erstellt eine neue Instanz der Helper-Klasse.
+use KLXM\MediaManagerExtras\ResponsiveImage;
 
-```php
-$mm = MediaManagerHelper::factory();
-```
-
-### Media Type Methoden
-
-```php
-public function addType(string $name, string $description = ''): self
-```
-Fügt einen neuen Media Manager Typ hinzu.
-
-```php
-$mm->addType('mein_typ', 'Meine Bildbearbeitung');
-```
-
-```php
-public function addEffect(
-    string $type, 
-    string $effect, 
-    array $params = [], 
-    int $priority = 1
-): self
-```
-Fügt einem Typ einen Effekt hinzu. Die Priorität bestimmt die Ausführungsreihenfolge.
-
-```php
-$mm->addEffect('mein_typ', 'resize', [
-    'width' => 500,
-    'height' => 500
-]);
-```
-
-Fügt mehreren Typen einen Effekt hinzu. `position` bestimmt, ob der Effekt am Anfang (prepend) oder Ende (append) der Effektkette eingefügt wird.
-
-```php 
-public function addEffectToTypes(
-    $types,           // Pattern (z.B. "team_*") oder Array von Typnamen 
-    string $effect,   // Name des Effekts
-    array $params = [], // Effekt-Parameter
-    string $position = 'append' // 'append' oder 'prepend'
-): self
-```
-
-```php
-public function install(): void
-```
-Installiert oder aktualisiert alle konfigurierten Typen.
-
-```php
-$mm->install();
-```
-
-```php
-public function uninstall(): void
-```
-Deinstalliert die angegebenen Typen.
-
-```php
-$mm->addType('mein_typ')->uninstall();
-```
-
-### Import/Export Methoden
-
-```php
-public function exportToJson(
-    ?array $typeNames = null,
-    ?string $file = null,
-    bool $prettyPrint = true,
-    bool $includeSystemTypes = false
-): string
-```
-Exportiert Media Manager Typen als JSON.
-
-```php
-// Alle Custom-Typen exportieren
-$json = $mm->exportToJson();
-
-// Bestimmte Typen in Datei exportieren
-$mm->exportToJson(['mein_typ'], 'media_types.json');
-```
-
-```php
-public function importFromJson(string $jsonFile): self
-```
-Importiert Media Manager Typen aus einer JSON-Datei.
-
-```php
-$mm->importFromJson($this->getPath('media_types.json'))->install();
-```
-
-### Debug Methoden
-
-```php
-public function showEffectParams(string $effect, bool $dump = true): ?array
-```
-Zeigt die verfügbaren Parameter eines Effekts an.
-
-```php
-// Parameter eines beliebigen Effekts anzeigen
-$mm->showEffectParams('resize');
-```
-
-```php
-public function listAvailableEffects(bool $dump = true): ?array
-```
-Listet alle verfügbaren Effekte auf.
-
-```php
-// Alle Effekte anzeigen
-$mm->listAvailableEffects();
-
-// Als Array zurückgeben
-$effects = $mm->listAvailableEffects(false);
-```
-
-### JSON Format
-
-Format für Import/Export:
-```json
-[
-    {
-        "name": "mein_typ",
-        "description": "Beschreibung",
-        "effects": {
-            "1": {
-                "effect": "resize",
-                "params": {
-                    "rex_effect_resize": {
-                        "width": 800,
-                        "height": 600
-                    }
-                }
-            }
-        }
-    }
-]
-```
-## SRCSET Helper Effekt
-
-Der SRCSET Helper Effekt ermöglicht es, responsive Bilder mit unterschiedlichen Größen für verschiedene Bildschirmauflösungen anzubieten. Das Add-on bietet auch Art Direction-Unterstützung, um verschiedene Bildausschnitte für verschiedene Geräte zu definieren.
-
-### Verwendung im Media Manager
-
-1. Erstelle einen Media Manager Typ für dein Bild
-2. Füge zuerst einen Resize- oder Crop-Effekt hinzu
-3. Füge dann den "SRCSET Helper" Effekt hinzu
-4. Konfiguriere das SRCSET-Attribut, z.B. `480 480w, 768 768w, 1024 1024w, 1600 1600w`
-
-### Verwendung im Template
-
-Zuerst die Klasse einbinden:
-
-```php
-use KLXM\MediaManagerHelper\ResponsiveImage;
-```
-
-Dann die Methoden verwenden:
-
-```php
-// Einfaches responsives Bild
-echo ResponsiveImage::getImageByType('bild.jpg', 'mein_typ', [
-    'alt' => 'Beschreibung',
-    'class' => 'responsive-img'
-]);
-
-// Mit Art Direction (unterschiedliche Typen für Desktop und Mobile)
 echo ResponsiveImage::getPictureTag(
-    'bild.jpg',
-    'desktop_typ',
+    'beispiel.jpg',
+    'hero_default',          // Fallback-Typ für <img src>
     [
-        '(max-width: 768px)' => 'mobile_typ'
-    ],
-    [
-        'alt' => 'Beschreibung'
-    ]
-);
+        // Kurzform: Media-Query => Typ-Name
+        '(min-width: 80rem)' => 'hero_xl',
 
-// Mit erweiterten Optionen (unterschiedliche Bilder und Größen)
-echo ResponsiveImage::getPictureTag(
-    'desktop-bild.jpg',
-    'desktop_typ',
-    [
-        [
-            'media' => '(max-width: 768px)',
-            'file' => 'mobiles-bild.jpg',
-            'type' => 'mobile_typ',
-            'sizes' => '100vw'
-        ]
+        // Langform: mit optionaler eigener Datei und sizes
+        ['media' => '(min-width: 48rem)', 'type' => 'hero_md', 'sizes' => '100vw'],
+        ['media' => '(min-width: 48rem)', 'type' => 'hero_md', 'file' => 'anderes.jpg'],
     ],
-    [
-        'alt' => 'Beschreibung'
-    ]
+    ['alt' => 'Hero', 'loading' => 'lazy'],
 );
 ```
 
-### Praktische Anwendungsbeispiele
-
-#### Beispiel 1: Responsive Artikel-Bilder
+### Hilfsmethoden
 
 ```php
-// Im Template für Artikel-Detailansichten
-echo ResponsiveImage::getImageByType($article->getImage(), 'article_image', [
-    'alt' => $article->getTitle(),
-    'class' => 'article-image'
-]);
+use KLXM\MediaManagerExtras\ResponsiveImage;
+
+// Prüfen ob Datei kein Pixel-Format (svg/pdf/eps)
+ResponsiveImage::isNonPixelFormat('icon.svg'); // true
+
+// srcset-Konfiguration eines Typs aus DB lesen
+$config = ResponsiveImage::getSrcsetConfig('hero_default');
+// [640 => '640w', 960 => '960w', 1280 => '1280w', 1600 => '1600w']
+
+// Fertigen srcset-String erzeugen
+$srcset = ResponsiveImage::getSrcsetString('hero_default', 'beispiel.jpg');
+
+// srcset-Definitionsstring parsen
+$parsed = ResponsiveImage::parseSrcsetString('640 640w, 960 960w, 1280 1280w');
+// [640 => '640w', 960 => '960w', 1280 => '1280w']
+
+// Placeholder im HTML manuell auflösen (läuft automatisch als Output-Filter)
+$html = ResponsiveImage::replaceMediaTags($html);
 ```
 
-#### Beispiel 2: Responsive Cards in unterschiedlichen Breiten
+---
 
-```php
-// Für ein Kartenraster mit unterschiedlichen Kartengrößen
-$cardType = '';
+## API-Referenz
 
-// Container-Klasse bestimmt den passenden Typ
-if (strpos($container_class, 'uk-width-1-1') !== false) {
-    $cardType = 'card_full';
-} elseif (strpos($container_class, 'uk-width-1-2') !== false) {
-    $cardType = 'card_half';
-} elseif (strpos($container_class, 'uk-width-1-3') !== false) {
-    $cardType = 'card_third';
-}
+### API: rex_media_manager_service
 
-echo ResponsiveImage::getImageByType($card->getImage(), $cardType, [
-    'alt' => $card->getTitle(),
-    'class' => 'card-image'
-]);
-```
+| Methode | Rückgabe | Beschreibung |
+|---|---|---|
+| `factory()` | `self` | Neue Instanz erstellen |
+| `ensureType(string $name, string $description = '')` | `self` | Typ registrieren |
+| `ensureEffect(string $type, string $effect, array $params = [], ?int $priority = null)` | `self` | Effekt mit Priorität setzen |
+| `prependEffect(string $type, string $effect, array $params = [])` | `self` | Effekt an Anfang einfügen |
+| `appendEffect(string $type, string $effect, array $params = [])` | `self` | Effekt an Ende anfügen |
+| `prependEffectToTypes(string\|array $types, string $effect, array $params = [])` | `self` | Effekt vorne an mehrere Typen |
+| `appendEffectToTypes(string\|array $types, string $effect, array $params = [])` | `self` | Effekt hinten an mehrere Typen |
+| `keepTypesOnUninstall()` | `self` | Typen bei `uninstall()` erhalten |
+| `ensure()` | `void` | Konfiguration in DB schreiben |
+| `uninstall()` | `void` | Typen aus DB entfernen |
+| `getParamsForEffect(string $effect)` | `array` | Parameterschema eines Effekts |
+| `getParamsForType(string $type)` | `array` | Typ-Snapshot (konfiguriert + Schema) |
+| `dumpType(string $type)` | `string` | PHP-Code für Typ generieren |
+| `dumpTypeInfo(array $typeInfo)` | `string` | PHP-Code aus Typ-Array generieren |
+| `listAvailableEffects()` | `list<string>` | Alle verfügbaren Effektnamen |
+| `importFromJson(string $jsonFile)` | `self` | Typen aus JSON-Datei laden |
+| `exportToJson(?array $typeNames, ?string $file, bool $prettyPrint, bool $includeSystemTypes)` | `string` | Als JSON exportieren |
+| `exportToFile(string $file, ?array $typeNames, bool $prettyPrint, bool $includeSystemTypes)` | `bool` | Direkt in Datei exportieren |
 
-#### Beispiel 3: Art Direction für Headerbild
+`$types` bei `*ToTypes`-Methoden: Array von Namen **oder** Wildcard-Pattern wie `"news_*"`.
 
-```php
-// Header-Bild mit unterschiedlichen Zuschnitten für verschiedene Geräte
-echo ResponsiveImage::getPictureTag(
-    'header.jpg',
-    'header_desktop',
-    [
-        // Smartphone (Portrait)
-        '(max-width: 576px)' => 'header_mobile_portrait',
-        // Tablet (Landscape)
-        '(max-width: 992px)' => 'header_tablet_landscape'
-    ],
-    [
-        'alt' => 'Website Header',
-        'class' => 'header-image'
-    ]
-);
-```
+### API: ResponsiveImage
 
-#### Beispiel 4: Unterschiedliche Produktbilder für Desktop und Mobile
-
-```php
-// Zeige auf mobilen Geräten ein anderes Produktbild
-echo ResponsiveImage::getPictureTag(
-    $product->getDesktopImage(),
-    'product_desktop',
-    [
-        [
-            'media' => '(max-width: 768px)',
-            'file' => $product->getMobileImage(),
-            'type' => 'product_mobile',
-            'sizes' => '100vw'
-        ]
-    ],
-    [
-        'alt' => $product->getName(),
-        'class' => 'product-image'
-    ]
-);
-```
-
-### Tipps und Best Practices
-
-#### Medientypen für verschiedene Anwendungsfälle erstellen
-
-Für optimale Ergebnisse empfehlen wir, spezifische Medientypen für verschiedene Anwendungsfälle zu erstellen:
-
-- **card_full** - für Container mit voller Breite
-- **card_half** - für Container mit halber Breite
-- **card_third** - für Container mit einem Drittel Breite
-- **card_mobile_portrait** - für Mobil-Ansicht im Portrait-Format
-- **card_desktop_landscape** - für Desktop-Ansicht im Landscape-Format
-
-#### SVG und andere nicht-pixelbasierte Formate
-
-Bei SVG und anderen nicht-pixelbasierten Formaten (PDF, EPS) wird das Bild immer direkt ohne SRCSET-Attribute ausgegeben, um Kompatibilitätsprobleme zu vermeiden.
-
-#### Effektive Media Manager Typen konfigurieren
-
-1. Erstelle einen Basistyp mit allgemeinen Einstellungen (z.B. Wasserzeichen oder Schärfen)
-2. Erstelle davon abgeleitete Typen für verschiedene Anwendungsfälle
-3. Füge den SRCSET-Helper Effekt hinzu und konfiguriere passende Bildgrößen:
-   - Für volle Breite: `480 480w, 800 800w, 1200 1200w, 1920 1920w`
-   - Für halbe Breite: `360 360w, 720 720w, 900 900w`
-   - Für Drittel-Breite: `300 300w, 600 600w, 800 800w`
-
-#### Optimale SRCSET-Konfiguration
-
-- Wähle eine gute Bandbreite an Bildgrößen, um verschiedene Geräte und Auflösungen abzudecken
-- Verwende den 2x Modifikator für Retina-Displays wo sinnvoll
-- Vermeide zu viele Bildgrößen, da dies die Ladezeit und den Cache-Speicher beeinträchtigen kann
-
-### Dynamische Bildanpassung mit JavaScript
-
-Das SRCSET Attribut kann auch als data-srcset Attribut eingebunden werden. Dann lädt der Browser zunächst das Standardbild (im SRC-Attribut). Das JavaScript für dynamische Anpassung wird automatisch eingebunden, wenn ein data-srcset Attribut erkannt wird.
-
-#### Beispiel:
-
-```html
-<img width="500" src="index.php?rex_media_type=ImgTypeName&rex_media_file=ImageFileName"
-    data-srcset="index.php?rex_media_type=ImgTypeName__400&rex_media_file=ImageFileName 480w,
-                 index.php?rex_media_type=ImgTypeName__700&rex_media_file=ImageFileName 768w,
-                 index.php?rex_media_type=ImgTypeName__800&rex_media_file=ImageFileName 960w">
-```
-
-#### Manuelle JavaScript-Aktualisierung
-
-Du kannst die Bildgrößen nach DOM-Änderungen manuell aktualisieren:
-
-```javascript
-// Nach dynamischen DOM-Änderungen
-if (typeof window.klxmMediaSrcsetProcess === 'function') {
-    window.klxmMediaSrcsetProcess();
-}
-```
-
-### FAQ
-
-#### Warum werden meine SVG-Dateien nicht mit dem SRCSET-Attribut versehen?
-
-SVG-Dateien sind vektorbasiert und skalieren ohne Qualitätsverlust. Daher werden sie absichtlich ohne SRCSET-Attribut ausgegeben, um Kompatibilitätsprobleme zu vermeiden.
-
-#### Kann ich unterschiedliche Bilder für Portrait- und Landscape-Orientierung verwenden?
-
-Ja, mit der erweiterten `getPictureTag()`-Methode kannst du komplett unterschiedliche Bilder für verschiedene Viewports definieren. Siehe Beispiel 3 in der Dokumentation.
-
-#### Wie kann ich das SRCSET-Attribut in einem REDAXO-Modul verwenden?
-
-Du kannst die Methoden `getImageByType()` oder `getPictureTag()` in deinem Modul-Output verwenden. Beispiel:
-
-```php
-// Im Modul-Output
-use KLXM\MediaManagerHelper\ResponsiveImage;
-
-$output = '<div class="my-module">';
-$output .= ResponsiveImage::getImageByType($media->getImage(), 'my_module_type', [
-    'alt' => $media->getTitle(),
-    'class' => 'module-image'
-]);
-$output .= '</div>';
-
-return $output;
-```
-
-#### Wie kann ich eigene responsive Typen mit dem MediaManagerHelper anlegen?
-
-Du kannst den MediaManagerHelper verwenden, um eigene responsive Typen anzulegen:
-
-```php
-// In einer Installationsroutine
-$mmHelper = MediaManagerHelper::factory();
-
-$mmHelper
-    ->addType('card_full', 'Vollbreite responsive Bilder (100%)')
-    ->addEffect('card_full', 'resize', [
-        'width' => 1920, 
-        'height' => '', 
-        'style' => 'maximum',
-        'allow_enlarge' => 'not_enlarge'
-    ], 1)
-    ->addEffect('card_full', 'srcset_helper', [
-        'srcset' => '480 480w, 768 768w, 1024 1024w, 1366 1366w, 1920 1920w'
-    ], 2)
-    ->install();
-```
-
-## Lizenz
-
-MIT
+| Methode | Rückgabe | Beschreibung |
+|---|---|---|
+| `getImgTag(string $file, string $type, array $attributes = [])` | `string` | `img`-Tag mit srcset-Placeholder |
+| `getImageByType(string $file, string $type, array $attributes = [])` | `string` | Alias für `getImgTag()` |
+| `getPictureTag(string $file, string $defaultType, array $sources = [], array $imgAttributes = [])` | `string` | `picture`-Tag für Art Direction |
+| `replaceMediaTags(string $html)` | `string` | Placeholder in HTML auflösen |
+| `getSrcsetString(string $type, string $file)` | `string` | Fertigen srcset-Attributwert erzeugen |
+| `getSrcsetConfig(string $type)` | `array<int, string>` | srcset-Konfiguration aus DB lesen |
+| `parseSrcsetString(string $srcsetString)` | `array<int, string>` | Definitionsstring parsen |
+| `isNonPixelFormat(string $file)` | `bool` | Prüfen ob SVG/PDF/EPS |

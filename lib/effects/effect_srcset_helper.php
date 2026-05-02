@@ -1,6 +1,6 @@
 <?php
 /**
- * @package redaxo\media-manager-helper
+ * @package redaxo\media-manager-extras
  * @version 1.0
  */
 

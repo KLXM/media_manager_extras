@@ -1,8 +1,24 @@
-package: media_manager_helper
+package: media_manager_extras
 version: '0.0.1-dev'
 author: 'KLXM Crossmedia'
-supportpage: https://github.com/KLXM/media_manager_helper/
+supportpage: https://github.com/KLXM/media_manager_extras/
+
+page:
+    title: 'translate:media_manager_extras_title'
+    perm: admin[]
+    icon: rex-icon fa-picture-o
+    pjax: true
+    subpages:
+        explorer:
+            title: 'translate:media_manager_extras_explorer'
+        help:
+            title: 'translate:help'
+            subPath: README.md
+            itemClass: pull-right
+
 requires:
     redaxo: '^5.18.1'
     php:
         version: '>=8.1, <9'
+    packages:
+        media_manager: '^2.0.0'

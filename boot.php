@@ -15,7 +15,7 @@ if (rex::isBackend() && rex::getUser()) {
 if (rex::isFrontend()) {
     rex_extension::register('OUTPUT_FILTER', function (rex_extension_point $ep) {
         $content = $ep->getSubject();
-        $content = \KLXM\MediaManagerHelper\ResponsiveImage::replaceMediaTags($content);
+        $content = \KLXM\MediaManagerExtras\ResponsiveImage::replaceMediaTags($content);
         $ep->setSubject($content);
     });
 }
